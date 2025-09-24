@@ -255,6 +255,10 @@ class DataAPIHandler:
 			elif geo_request.ai_mode and not results:
 				response_data["ai_response"] = "No results found for your search query. Try adjusting your search terms or location."
 			
+			# Add helpful message when no results found (regardless of AI mode)
+			if not results:
+				response_data["message"] = "No businesses, services, or products found matching your query. Try adjusting your search terms or expanding your search area."
+			
 			return response_data
 			
 		except Exception as e:
