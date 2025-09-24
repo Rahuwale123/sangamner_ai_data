@@ -136,6 +136,7 @@ class GeoSearchRequest(BaseModel):
 	longitude: float = Field(..., description="User's longitude coordinate")
 	client_id: str = Field(..., description="Client ID to filter entities")
 	query: str = Field(..., description="Search query text (e.g., 'tea', 'breakfast', 'restaurant')")
+	ai_mode: bool = Field(default=False, description="Enable AI-powered response generation")
 
 
 class ErrorResponse(BaseModel):

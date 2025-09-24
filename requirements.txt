@@ -6,3 +6,5 @@ python-multipart==0.0.6
 sentence-transformers
 python-dotenv==1.0.0
 transformers
+aiohttp==3.9.1
+
