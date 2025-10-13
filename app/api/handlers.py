@@ -8,7 +8,7 @@ from app.models.schemas import (
 	GeoSearchRequest, Business, Service, Product, Location
 )
 from app.services.qdrant_manager import QdrantManager
-from app.services.gemini_service import GeminiService
+ 
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class DataAPIHandler:
 	def __init__(self):
 		self.qdrant_manager = QdrantManager()
-		self.gemini_service = GeminiService()
+		
 
 	async def save_data(self, request: Union[Business, Service, Product]) -> SaveResponse:
 		"""Handle save data API request"""
@@ -227,35 +227,13 @@ class DataAPIHandler:
 					"latitude": geo_request.latitude,
 					"longitude": geo_request.longitude,
 					"client_id": geo_request.client_id,
-					"query": geo_request.query,
-					"ai_mode": geo_request.ai_mode
+					"query": geo_request.query
 				},
 				"results": results,
 				"total": len(results)
 			}
 			
-			# Add AI response if AI mode is enabled
-			if geo_request.ai_mode and results:
-				try:
-					# Prepare location context for AI
-					location_context = f"Sangamner area (coordinates: {geo_request.latitude}, {geo_request.longitude})"
-					
-					# Generate AI summary
-					ai_response = await self.gemini_service.generate_search_summary(
-						search_results=results,
-						query=geo_request.query,
-						location=location_context
-					)
-					
-					response_data["ai_response"] = ai_response
-					
-				except Exception as e:
-					logger.error(f"Error generating AI response: {e}")
-					response_data["ai_response"] = "AI summary is currently unavailable. Please try again later."
-			elif geo_request.ai_mode and not results:
-				response_data["ai_response"] = "No results found for your search query. Try adjusting your search terms or location."
-			
-			# Add helpful message when no results found (regardless of AI mode)
+			# Add helpful message when no results found
 			if not results:
 				response_data["message"] = "No businesses, services, or products found matching your query. Try adjusting your search terms or expanding your search area."
 			

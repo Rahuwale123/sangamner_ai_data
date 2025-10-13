@@ -2,17 +2,14 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Union
 from enum import Enum
 
-
 class EntityType(str, Enum):
 	BUSINESS = "business"
 	SERVICE = "service"
 	PRODUCT = "product"
 
-
 class Location(BaseModel):
 	lat: float = Field(..., description="Latitude coordinate")
 	lon: float = Field(..., description="Longitude coordinate")
-
 
 class BusinessPayload(BaseModel):
 	type: EntityType = EntityType.BUSINESS
@@ -24,7 +21,6 @@ class BusinessPayload(BaseModel):
 	phone: Optional[str] = Field(None, description="Contact phone number")
 	description: Optional[str] = Field(None, description="Business description")
 	tags: Optional[List[str]] = Field(default_factory=list, description="Business tags")
-	# Extended fields to preserve incoming data
 	client_id: Optional[str] = Field(None, description="Client identifier")
 	user_id: Optional[str] = Field(None, description="User identifier")
 	business_type: Optional[str] = Field(None, description="Type of business")
@@ -36,7 +32,6 @@ class BusinessPayload(BaseModel):
 	email: Optional[str] = Field(None, description="Email")
 	website: Optional[str] = Field(None, description="Website")
 
-
 class ServicePayload(BaseModel):
 	type: EntityType = EntityType.SERVICE
 	service_id: str = Field(..., description="Unique service identifier")
@@ -47,10 +42,8 @@ class ServicePayload(BaseModel):
 	price: Optional[str] = Field(None, description="Service price")
 	description: Optional[str] = Field(None, description="Service description")
 	tags: Optional[List[str]] = Field(default_factory=list, description="Service tags")
-	# Extended fields to preserve incoming data
 	client_id: Optional[str] = Field(None, description="Client identifier")
 	user_id: Optional[str] = Field(None, description="User identifier")
-
 
 class ProductPayload(BaseModel):
 	type: EntityType = EntityType.PRODUCT
@@ -63,11 +56,8 @@ class ProductPayload(BaseModel):
 	price: Optional[str] = Field(None, description="Product price")
 	description: Optional[str] = Field(None, description="Product description")
 	tags: Optional[List[str]] = Field(default_factory=list, description="Product tags")
-	# Extended fields to preserve incoming data
 	client_id: Optional[str] = Field(None, description="Client identifier")
 
-
-# Request models for API endpoints
 class SaveBusinessRequest(BaseModel):
 	type: EntityType = EntityType.BUSINESS
 	business_id: str
@@ -79,7 +69,6 @@ class SaveBusinessRequest(BaseModel):
 	description: Optional[str] = None
 	tags: Optional[List[str]] = None
 
-
 class SaveServiceRequest(BaseModel):
 	type: EntityType = EntityType.SERVICE
 	service_id: str
@@ -90,7 +79,6 @@ class SaveServiceRequest(BaseModel):
 	price: Optional[str] = None
 	description: Optional[str] = None
 	tags: Optional[List[str]] = None
-
 
 class SaveProductRequest(BaseModel):
 	type: EntityType = EntityType.PRODUCT
@@ -104,10 +92,7 @@ class SaveProductRequest(BaseModel):
 	description: Optional[str] = None
 	tags: Optional[List[str]] = None
 
-
-# Union type for save requests
 SaveRequest = Union[SaveBusinessRequest, SaveServiceRequest, SaveProductRequest]
-
 
 class UpdateRequest(BaseModel):
 	business_name: Optional[str] = None
@@ -120,32 +105,25 @@ class UpdateRequest(BaseModel):
 	description: Optional[str] = None
 	tags: Optional[List[str]] = None
 
-
 class SaveResponse(BaseModel):
 	status: str = "success"
 	id: str
-
 
 class UpdateResponse(BaseModel):
 	status: str = "updated"
 	id: str
 
-
 class GeoSearchRequest(BaseModel):
-	latitude: float = Field(..., description="User's latitude coordinate")
-	longitude: float = Field(..., description="User's longitude coordinate")
-	client_id: str = Field(..., description="Client ID to filter entities")
-	query: str = Field(..., description="Search query text (e.g., 'tea', 'breakfast', 'restaurant')")
-	ai_mode: bool = Field(default=False, description="Enable AI-powered response generation")
-
+    latitude: float = Field(..., description="User's latitude coordinate")
+    longitude: float = Field(..., description="User's longitude coordinate")
+    client_id: str = Field(..., description="Client ID to filter entities")
+    query: str = Field(..., description="Search query text (e.g., 'tea', 'breakfast', 'restaurant')")
 
 class ErrorResponse(BaseModel):
 	status: str = "error"
 	message: str
 	details: Optional[Dict[str, Any]] = None
 
-
-# New request schemas used only by /data/save endpoint (alternate shape)
 class Business(BaseModel):
 	business_id: str
 	name: str
@@ -165,7 +143,6 @@ class Business(BaseModel):
 	long: float
 	tags: List[str] = []
 
-
 class Service(BaseModel):
 	service_id: str
 	service_name: str
@@ -176,7 +153,6 @@ class Service(BaseModel):
 	lat: float
 	long: float
 	tags: List[str] = []
-
 
 class Product(BaseModel):
 	product_id: str

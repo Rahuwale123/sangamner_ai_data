@@ -48,7 +48,6 @@ class QdrantManager:
 
 	def _string_to_uuid(self, string_id: str) -> str:
 		"""Convert string ID to UUID format for Qdrant"""
-		# Create a deterministic UUID from the string
 		return str(uuid.uuid5(uuid.NAMESPACE_DNS, string_id))
 
 	def _extract_text_for_embedding(self, payload: Union[BusinessPayload, ServicePayload, ProductPayload]) -> str:
@@ -74,38 +73,31 @@ class QdrantManager:
 		"""Calculate distance between two points using Haversine formula"""
 		import math
 		
-		# Convert latitude and longitude from degrees to radians
 		lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
 		
-		# Haversine formula
 		dlat = lat2 - lat1
 		dlon = lon2 - lon1
 		a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
 		c = 2 * math.asin(math.sqrt(a))
 		
-		# Radius of earth in kilometers
 		r = 6371
 		return c * r
 
 	def save_business(self, payload: BusinessPayload) -> str:
 		"""Save business to Qdrant"""
 		try:
-			# Generate embedding
 			text = self._extract_text_for_embedding(payload)
 			vector = self._generate_embedding(text)
 			
-			# Prepare payload for Qdrant
 			qdrant_payload = payload.model_dump()
 			qdrant_payload['location'] = payload.location.model_dump()
 			
-			# Create point with UUID
 			point = PointStruct(
 				id=self._string_to_uuid(payload.business_id),
 				vector=vector,
 				payload=qdrant_payload
 			)
 			
-			# Upsert to Qdrant
 			self.client.upsert(
 				collection_name=self.collection_name,
 				points=[point]
@@ -121,22 +113,18 @@ class QdrantManager:
 	def save_service(self, payload: ServicePayload) -> str:
 		"""Save service to Qdrant"""
 		try:
-			# Generate embedding
 			text = self._extract_text_for_embedding(payload)
 			vector = self._generate_embedding(text)
 			
-			# Prepare payload for Qdrant
 			qdrant_payload = payload.model_dump()
 			qdrant_payload['location'] = payload.location.model_dump()
 			
-			# Create point with UUID
 			point = PointStruct(
 				id=self._string_to_uuid(payload.service_id),
 				vector=vector,
 				payload=qdrant_payload
 			)
 			
-			# Upsert to Qdrant
 			self.client.upsert(
 				collection_name=self.collection_name,
 				points=[point]
@@ -152,22 +140,18 @@ class QdrantManager:
 	def save_product(self, payload: ProductPayload) -> str:
 		"""Save product to Qdrant"""
 		try:
-			# Generate embedding
 			text = self._extract_text_for_embedding(payload)
 			vector = self._generate_embedding(text)
 			
-			# Prepare payload for Qdrant
 			qdrant_payload = payload.model_dump()
 			qdrant_payload['location'] = payload.location.model_dump()
 			
-			# Create point with UUID
 			point = PointStruct(
 				id=self._string_to_uuid(payload.product_id),
 				vector=vector,
 				payload=qdrant_payload
 			)
 			
-			# Upsert to Qdrant
 			self.client.upsert(
 				collection_name=self.collection_name,
 				points=[point]
@@ -205,34 +189,28 @@ class QdrantManager:
 	def update_entity(self, entity_id: str, update_data: Dict[str, Any]) -> str:
 		"""Update existing entity"""
 		try:
-			# Get existing entity
 			existing = self.get_by_id(entity_id)
 			if not existing:
 				raise ValueError(f"Entity with ID {entity_id} not found")
 			
-			# Update payload
 			updated_payload = existing['payload'].copy()
 			updated_payload.update(update_data)
 			
-			# Check if text fields changed (need to regenerate embedding)
 			text_fields = ['business_name', 'service_name', 'product_name', 'description', 'tags']
 			text_changed = any(field in update_data for field in text_fields)
 			
 			if text_changed:
-				# Regenerate embedding
 				text = self._extract_text_for_embedding_from_payload(updated_payload)
 				vector = self._generate_embedding(text)
 			else:
 				vector = existing['vector']
 			
-			# Create updated point
 			point = PointStruct(
 				id=self._string_to_uuid(entity_id),
 				vector=vector,
 				payload=updated_payload
 			)
 			
-			# Upsert to Qdrant
 			self.client.upsert(
 				collection_name=self.collection_name,
 				points=[point]
@@ -249,16 +227,13 @@ class QdrantManager:
 		"""Extract text fields for embedding generation from payload dict"""
 		text_parts = []
 		
-		# Add name fields
 		for name_field in ['business_name', 'service_name', 'product_name']:
 			if name_field in payload and payload[name_field]:
 				text_parts.append(payload[name_field])
 		
-		# Add description
 		if 'description' in payload and payload['description']:
 			text_parts.append(payload['description'])
 		
-		# Add tags
 		if 'tags' in payload and payload['tags']:
 			text_parts.extend(payload['tags'])
 		
@@ -294,11 +269,9 @@ class QdrantManager:
 			best_results: List[Dict[str, Any]] = []
 			used_radius_m: Optional[int] = None
 
-			# Absolute semantic similarity floor (before any normalization)
 			ABS_MIN_RAW_SIM = 0.35
 
 			for radius_m in search_radii_meters:
-				# Build flexible client_id filter to match either string or integer stored values
 				client_values: List[Union[str, int]] = []
 				try:
 					client_values.append(str(client_id))
@@ -320,6 +293,7 @@ class QdrantManager:
 						)
 					),
 				]
+
 				search_filter = Filter(must=must_conditions, should=client_should)
 
 				search_results = self.client.search(
@@ -345,7 +319,6 @@ class QdrantManager:
 					distance_km = self._calculate_distance(latitude, longitude, entity_lat, entity_lon)
 
 					cleaned_payload = {k: v for k, v in dict(payload).items() if v is not None}
-					# Flatten location if present to lat/long keys expected by clients
 					loc = cleaned_payload.get('location')
 					if isinstance(loc, dict):
 						if 'lat' in loc:
@@ -360,7 +333,6 @@ class QdrantManager:
 
 					raw_score = float(res.score or 0.0)
 
-					# Keyword match check
 					tags = [str(t).lower() for t in (cleaned_payload.get('tags') or [])]
 					names = [
 						str(cleaned_payload.get('product_name', '')).lower(),
@@ -371,7 +343,6 @@ class QdrantManager:
 					text_tokens = set((" ".join(tags + names)).split())
 					has_keyword_overlap = len(query_lower_tokens.intersection(text_tokens)) > 0
 
-					# Filter out very weak semantic matches unless there is explicit keyword overlap
 					if not has_keyword_overlap and raw_score < ABS_MIN_RAW_SIM:
 						continue
 
@@ -389,10 +360,8 @@ class QdrantManager:
 				results_scored: List[Dict[str, Any]] = []
 
 				for item in interim:
-					# Use raw cosine similarity clamped to [0,1] to avoid artificial inflation
 					semantic_norm = max(0.0, min(1.0, item['raw_score']))
 
-					# Keep minimum normalized similarity threshold as an extra guard
 					if semantic_norm < 0.4 and not item['has_keyword_overlap']:
 						continue
 
@@ -447,10 +416,8 @@ class QdrantManager:
 	def search_similar(self, query: str, limit: int = 10, filter_conditions: Optional[Dict] = None) -> List[Dict[str, Any]]:
 		"""Search for similar entities"""
 		try:
-			# Generate query embedding
 			query_vector = self._generate_embedding(query)
 			
-			# Build filter if provided
 			search_filter = None
 			if filter_conditions:
 				conditions = []
@@ -458,7 +425,6 @@ class QdrantManager:
 					conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
 				search_filter = Filter(must=conditions)
 			
-			# Search
 			results = self.client.search(
 				collection_name=self.collection_name,
 				query_vector=query_vector,

@@ -14,6 +14,4 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM
 # Vector dimensions for the embedding model
 VECTOR_SIZE = 384
 
-# Gemini AI Configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyAE0oIus2UKhuI3MdDDbvqlZB03c-WOvKs")
-GEMINI_API_URL = os.getenv("GEMINI_API_URL", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent")
+# (AI mode removed) No Gemini configuration required

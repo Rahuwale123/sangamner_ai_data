@@ -174,14 +174,12 @@ async def search_nearby_services(geo_request: GeoSearchRequest):
 		"latitude": 19.123,
 		"longitude": 73.456,
 		"client_id": "client-1",
-		"query": "tea breakfast",
-		"ai_mode": true
+		"query": "tea breakfast"
 	}
 	```
 	
 	**Response:**
 	Returns mixed entities with fields: entity_type, entity_id, score, payload (entire stored object).
-	When ai_mode is true, includes an additional "ai_response" field with AI-generated summary.
 	"""
 	return await api_handler.geo_search_services(geo_request)
 
