@@ -112,7 +112,7 @@ class SaveResponse(BaseModel):
 class UpdateResponse(BaseModel):
 	status: str = "updated"
 	id: str
-
+#
 class GeoSearchRequest(BaseModel):
     latitude: float = Field(..., description="User's latitude coordinate")
     longitude: float = Field(..., description="User's longitude coordinate")
