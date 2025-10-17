@@ -214,12 +214,14 @@ class DataAPIHandler:
 	async def geo_search_services(self, geo_request: GeoSearchRequest) -> Dict[str, Any]:
 		"""Search across client using semantic + distance sort (iterative geo radius, hidden from client)."""
 		try:
+			logger.info("geo_search_services: lat=%s lon=%s client_id=%s query=%r", geo_request.latitude, geo_request.longitude, geo_request.client_id, geo_request.query)
 			results = self.qdrant_manager.geo_search_entities(
 				latitude=geo_request.latitude,
 				longitude=geo_request.longitude,
 				client_id=geo_request.client_id,
 				query=geo_request.query
 			)
+			logger.info("geo_search_services: total=%s example_ids=%s", len(results), [r.get("entity_id") for r in results[:3]])
 			
 			response_data = {
 				"status": "success",

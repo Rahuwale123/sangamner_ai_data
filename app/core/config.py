@@ -12,7 +12,7 @@ QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "sangmaner_data")
 # Embedding Model Configuration
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
-# Vector dimensions for the embedding model
+# Vector dimensions for the embeding model
 VECTOR_SIZE = 384
 
 # (AI mode removed) No Gemini configuration required

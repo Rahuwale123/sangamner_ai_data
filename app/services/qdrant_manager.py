@@ -294,7 +294,7 @@ class QdrantManager:
 			
 			logger.info(f"Deleted entity: {entity_id}")
 			return True
-			
+				
 		except Exception as e:
 			logger.error(f"Error deleting entity: {e}")
 			return False
@@ -305,6 +305,7 @@ class QdrantManager:
 		"""
 		try:
 			from qdrant_client.models import GeoPoint, GeoRadius
+			logger.info("geo_search_entities: lat=%s lon=%s client_id=%s query=%r", latitude, longitude, client_id, query)
 
 			query_vector = self._generate_embedding(query)
 
@@ -344,6 +345,7 @@ class QdrantManager:
 					limit=1000,
 					query_filter=search_filter
 				)
+				logger.debug("radius=%sm: got %s candidates", radius_m, len(search_results) if search_results else 0)
 
 				if not search_results:
 					continue
@@ -356,6 +358,7 @@ class QdrantManager:
 					payload = res.payload or {}
 					loc = payload.get('location') or {}
 					if not isinstance(loc, dict) or 'lat' not in loc or 'lon' not in loc:
+						logger.debug("skip: missing_location id=%s", payload.get('business_id') or payload.get('service_id') or payload.get('product_id'))
 						continue
 
 					entity_lat = float(loc['lat'])
@@ -434,6 +437,7 @@ class QdrantManager:
 					used_radius_m = radius_m
 					break
 
+			logger.info("geo_search_entities: selected=%s min_km=%.2f max_km=%.2f", len(best_results), min((r.get('distance_km') or 0) for r in best_results) if best_results else 0, max((r.get('distance_km') or 0) for r in best_results) if best_results else 0)
 			return best_results
 
 		except Exception as e:
