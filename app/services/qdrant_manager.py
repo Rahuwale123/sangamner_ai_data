@@ -6,7 +6,10 @@ from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, Fi
 from sentence_transformers import SentenceTransformer
 import json
 
-from app.core.config import QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION_NAME, EMBEDDING_MODEL, VECTOR_SIZE
+from app.core.config import (
+	QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION_NAME, EMBEDDING_MODEL, VECTOR_SIZE,
+	SEMANTIC_SCORE_THRESHOLD, SEMANTIC_WEIGHT, GEO_WEIGHT,
+)
 from app.models.schemas import BusinessPayload, ServicePayload, ProductPayload, Location
 
 logger = logging.getLogger(__name__)
@@ -54,20 +57,32 @@ class QdrantManager:
 		"""Extract text fields for embedding generation"""
 		text_parts = []
 		
-		if hasattr(payload, 'business_name'):
-			text_parts.append(payload.business_name)
-		if hasattr(payload, 'service_name'):
-			text_parts.append(payload.service_name)
-		if hasattr(payload, 'product_name'):
-			text_parts.append(payload.product_name)
+		# Names get moderate weight
+		if hasattr(payload, 'business_name') and payload.business_name:
+			text_parts.extend([payload.business_name] * 2)
+		if hasattr(payload, 'service_name') and payload.service_name:
+			text_parts.extend([payload.service_name] * 2)
+		if hasattr(payload, 'product_name') and payload.product_name:
+			text_parts.extend([payload.product_name] * 2)
 		
-		if payload.description:
+		# Description as-is
+		if getattr(payload, 'description', None):
 			text_parts.append(payload.description)
 		
-		if payload.tags:
-			text_parts.extend(payload.tags)
+		# Location semantics (city/state/country/pincode) to help geographic queries
+		for loc_field in ['city', 'state', 'country', 'pincode']:
+			val = getattr(payload, loc_field, None)
+			if val:
+				text_parts.extend([str(val)] * 2)
 		
-		return " ".join(text_parts)
+		# Tags are highly important for retrieval; upweight by repeating
+		tags = getattr(payload, 'tags', []) or []
+		if tags:
+			lower_tags = [str(t).strip().lower() for t in tags if t]
+			# Repeat tags to upweight them without hardcoded synonyms
+			text_parts.extend(lower_tags * 3)
+		
+		return " ".join([str(p) for p in text_parts if p])
 
 	def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 		"""Calculate distance between two points using Haversine formula"""
@@ -227,17 +242,47 @@ class QdrantManager:
 		"""Extract text fields for embedding generation from payload dict"""
 		text_parts = []
 		
+		# Names with moderate weight
 		for name_field in ['business_name', 'service_name', 'product_name']:
-			if name_field in payload and payload[name_field]:
-				text_parts.append(payload[name_field])
+			val = payload.get(name_field)
+			if val:
+				text_parts.extend([val] * 2)
 		
-		if 'description' in payload and payload['description']:
-			text_parts.append(payload['description'])
+		desc = payload.get('description')
+		if desc:
+			text_parts.append(desc)
 		
-		if 'tags' in payload and payload['tags']:
-			text_parts.extend(payload['tags'])
+		# Location fields for semantics
+		for loc_field in ['city', 'state', 'country', 'pincode']:
+			val = payload.get(loc_field)
+			if val:
+				text_parts.extend([str(val)] * 2)
 		
-		return " ".join(text_parts)
+		tags = payload.get('tags') or []
+		if tags:
+			lower_tags = [str(t).strip().lower() for t in tags if t]
+			text_parts.extend(lower_tags * 3)
+		
+		return " ".join([str(p) for p in text_parts if p])
+
+	def _normalize_query_tokens(self, query: str) -> set:
+		"""Lowercase, strip punctuation, drop common stopwords, add simple de-plural forms."""
+		import re
+		text = query.lower()
+		text = re.sub(r"[\?\!\,\.\n\t]", " ", text)
+		raw_tokens = [t for t in text.split() if t]
+		stop = {
+			"the", "a", "an", "near", "me", "for", "to", "of", "in", "at", "find", "please",
+		}
+		tokens = []
+		for tok in raw_tokens:
+			if tok in stop:
+				continue
+			# simple singularization
+			if tok.endswith('s') and len(tok) > 3:
+				tokens.append(tok[:-1])
+			tokens.append(tok)
+		return set(tokens)
 
 	def delete_entity(self, entity_id: str) -> bool:
 		"""Delete entity by ID"""
@@ -263,7 +308,6 @@ class QdrantManager:
 			logger.info("geo_search_entities: lat=%s lon=%s client_id=%s query=%r", latitude, longitude, client_id, query)
 
 			query_vector = self._generate_embedding(query)
-			query_lower_tokens = set(str(query).lower().split())
 
 			search_radii_meters = [2000, 5000, 10000, 20000, 50000, 100000, 200000]
 
@@ -280,11 +324,7 @@ class QdrantManager:
 				except Exception:
 					client_values.append(str(client_id))
 
-				client_should = [
-					FieldCondition(key='client_id', match=MatchValue(value=v))
-					for v in client_values
-				]
-
+				# Enforce client_id filter as MUST (not soft should)
 				must_conditions = [
 					FieldCondition(
 						key='location',
@@ -294,8 +334,10 @@ class QdrantManager:
 						)
 					),
 				]
+				for v in client_values:
+					must_conditions.append(FieldCondition(key='client_id', match=MatchValue(value=v)))
 
-				search_filter = Filter(must=must_conditions, should=client_should)
+				search_filter = Filter(must=must_conditions)
 
 				search_results = self.client.search(
 					collection_name=self.collection_name,
@@ -309,6 +351,8 @@ class QdrantManager:
 					continue
 
 				interim: List[Dict[str, Any]] = []
+				# Tokenize query to compare with tags (no synonyms/hardcoded keywords)
+				query_tokens = self._normalize_query_tokens(query)
 
 				for res in search_results:
 					payload = res.payload or {}
@@ -335,27 +379,22 @@ class QdrantManager:
 						cleaned_payload['tags'] = []
 
 					raw_score = float(res.score or 0.0)
-
-					tags = [str(t).lower() for t in (cleaned_payload.get('tags') or [])]
-					names = [
-						str(cleaned_payload.get('product_name', '')).lower(),
-						str(cleaned_payload.get('service_name', '')).lower(),
-						str(cleaned_payload.get('business_name', '')).lower(),
-						str(cleaned_payload.get('description', '')).lower(),
-					]
-					text_tokens = set((" ".join(tags + names)).split())
-					has_keyword_overlap = len(query_lower_tokens.intersection(text_tokens)) > 0
-
-					if not has_keyword_overlap and raw_score < ABS_MIN_RAW_SIM:
-						logger.debug("skip: low_semantic_no_overlap raw=%s id=%s", raw_score, payload.get('business_id') or payload.get('service_id') or payload.get('product_id'))
+					semantic_norm = max(0.0, min(1.0, raw_score))
+					# Allow pass-through if tags overlap with query tokens, even if below threshold (but not too low)
+					tags_lower = [str(t).strip().lower() for t in (cleaned_payload.get('tags') or [])]
+					matches_tag = any(t in query_tokens for t in tags_lower)
+					min_pass_score = max(0.2, SEMANTIC_SCORE_THRESHOLD * 0.6)
+					if not matches_tag and semantic_norm < SEMANTIC_SCORE_THRESHOLD:
+						continue
+					if matches_tag and semantic_norm < min_pass_score:
 						continue
 
 					interim.append({
 						'qdrant_id': res.id,
-						'raw_score': raw_score,
+						'raw_score': semantic_norm,
 						'distance_km': round(distance_km, 6),
 						'payload': cleaned_payload,
-						'has_keyword_overlap': has_keyword_overlap
+					'has_keyword_overlap': matches_tag
 					})
 
 				if not interim:
@@ -365,26 +404,13 @@ class QdrantManager:
 
 				for item in interim:
 					semantic_norm = max(0.0, min(1.0, item['raw_score']))
-
-					if semantic_norm < 0.4 and not item['has_keyword_overlap']:
-						continue
-
 					distance_score = 1.0 - min((item['distance_km'] * 1000.0) / float(radius_m), 1.0)
-
 					payload = item['payload']
 					entity_type = payload.get('type')
-
-					keyword_boost = 0.1 if item['has_keyword_overlap'] else 0.0
-
-					if entity_type == 'product':
-						type_boost = 0.15
-					elif entity_type == 'service':
-						type_boost = 0.08
-					else:
-						type_boost = 0.0
-
-					combined_score = 0.7 * semantic_norm + 0.3 * distance_score + type_boost + keyword_boost
-
+					combined_score = SEMANTIC_WEIGHT * semantic_norm + GEO_WEIGHT * distance_score
+					# Gate out items that still look weak semantically even after blending
+					if semantic_norm < SEMANTIC_SCORE_THRESHOLD:
+						continue
 					if entity_type == 'business':
 						domain_id = payload.get('business_id')
 					elif entity_type == 'service':
@@ -433,18 +459,31 @@ class QdrantManager:
 			results = self.client.search(
 				collection_name=self.collection_name,
 				query_vector=query_vector,
-				limit=limit,
+				limit=limit * 3,  # overfetch to allow post-filtering by threshold
 				query_filter=search_filter
 			)
 			
-			return [
-				{
+			cleaned = []
+			query_tokens = self._normalize_query_tokens(query)
+			min_pass_score = max(0.2, SEMANTIC_SCORE_THRESHOLD * 0.6)
+			for result in results:
+				raw = float(result.score or 0.0)
+				semantic = max(0.0, min(1.0, raw))
+				payload = result.payload or {}
+				tags_lower = [str(t).strip().lower() for t in (payload.get('tags') or [])]
+				matches_tag = any(t in query_tokens for t in tags_lower)
+				if not matches_tag and semantic < SEMANTIC_SCORE_THRESHOLD:
+					continue
+				if matches_tag and semantic < min_pass_score:
+					continue
+				cleaned.append({
 					'id': result.id,
-					'score': result.score,
-					'payload': result.payload
-				}
-				for result in results
-			]
+					'score': round(semantic, 4),
+					'payload': payload
+				})
+			
+			cleaned.sort(key=lambda x: -x['score'])
+			return cleaned[:limit]
 			
 		except Exception as e:
 			logger.error(f"Error searching similar entities: {e}")
