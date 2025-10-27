@@ -45,10 +45,16 @@ async def health_check():
 	"""Detailed health check"""
 	try:
 		# Test Qdrant connection
-		test_entity = api_handler.qdrant_manager.get_by_id("test")
+		collections = api_handler.qdrant_manager.client.get_collections()
+		collection_info = api_handler.qdrant_manager.client.get_collection(api_handler.qdrant_manager.collection_name)
+		
 		return {
 			"status": "healthy",
 			"qdrant_connection": "ok",
+			"collection_name": api_handler.qdrant_manager.collection_name,
+			"points_count": collection_info.points_count,
+			"vector_size": collection_info.config.params.vectors.size,
+			"distance": collection_info.config.params.vectors.distance,
 			"message": "All systems operational"
 		}
 	except Exception as e:
@@ -219,5 +225,25 @@ if __name__ == "__main__":
 		host="0.0.0.0",
 		port=8001,
 		reload=True,
-		log_level="info"
+		log_level="info",
+		log_config={
+			"version": 1,
+			"disable_existing_loggers": False,
+			"formatters": {
+				"default": {
+					"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+				}
+			},
+			"handlers": {
+				"default": {
+					"class": "logging.StreamHandler",
+					"stream": "ext://sys.stdout",
+					"formatter": "default",
+				}
+			},
+			"root": {
+				"handlers": ["default"],
+				"level": "INFO"
+			}
+		}
 	)
