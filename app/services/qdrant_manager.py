@@ -17,7 +17,19 @@ logger = logging.getLogger(__name__)
 
 class QdrantManager:
 	def __init__(self):
-		self.client = QdrantDBClient(host=QDRANT_HOST, port=QDRANT_PORT)
+		# Try server mode first, fall back to local path if fails
+		try:
+			self.client = QdrantDBClient(host=QDRANT_HOST, port=QDRANT_PORT)
+			logger.info(f"Connected to Qdrant server at {QDRANT_HOST}:{QDRANT_PORT}")
+		except Exception as e:
+			logger.warning(f"Failed to connect to Qdrant server: {e}. Trying local path...")
+			try:
+				self.client = QdrantDBClient(path="./qdrant_data")
+				logger.info("Connected to Qdrant using local path: ./qdrant_data")
+			except Exception as e2:
+				logger.error(f"Failed to connect to Qdrant using local path: {e2}")
+				raise
+		
 		self.embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 		self.collection_name = QDRANT_COLLECTION_NAME
 		self._ensure_collection_exists()
@@ -304,7 +316,7 @@ class QdrantManager:
 		Applies an increasing geo radius until results are found, then ranks within that radius.
 		"""
 		try:
-			from qdrant_client.models import GeoPoint, GeoRadius
+			from qdrant_client.models import GeoPoint, GeoRadius, Filter
 			logger.info("geo_search_entities: lat=%s lon=%s client_id=%s query=%r", latitude, longitude, client_id, query)
 
 			query_vector = self._generate_embedding(query)
@@ -317,27 +329,23 @@ class QdrantManager:
 			ABS_MIN_RAW_SIM = 0.35
 
 			for radius_m in search_radii_meters:
-				client_values: List[Union[str, int]] = []
-				try:
-					client_values.append(str(client_id))
-					client_values.append(int(str(client_id)))
-				except Exception:
-					client_values.append(str(client_id))
-
-				# Enforce client_id filter as MUST (not soft should)
-				must_conditions = [
-					FieldCondition(
-						key='location',
-						geo_radius=GeoRadius(
-							center=GeoPoint(lat=latitude, lon=longitude),
-							radius=radius_m
-						)
-					),
-				]
-				for v in client_values:
-					must_conditions.append(FieldCondition(key='client_id', match=MatchValue(value=v)))
-
-				search_filter = Filter(must=must_conditions)
+				# Try both string and int formats for client_id
+				# Start with string format (most likely)
+				client_id_str = str(client_id)
+				
+				# Enforce client_id and geo filters
+				search_filter = Filter(
+					must=[
+						FieldCondition(
+							key='location',
+							geo_radius=GeoRadius(
+								center=GeoPoint(lat=latitude, lon=longitude),
+								radius=radius_m
+							)
+						),
+						FieldCondition(key='client_id', match=MatchValue(value=client_id_str))
+					]
+				)
 
 				search_results = self.client.search(
 					collection_name=self.collection_name,
@@ -345,17 +353,20 @@ class QdrantManager:
 					limit=1000,
 					query_filter=search_filter
 				)
-				logger.debug("radius=%sm: got %s candidates", radius_m, len(search_results) if search_results else 0)
+				logger.info(f"radius={radius_m}m: got {len(search_results) if search_results else 0} candidates for client_id={client_id_str}")
 
 				if not search_results:
+					logger.info(f"radius={radius_m}m: no candidates found, continuing with next radius")
 					continue
 
 				interim: List[Dict[str, Any]] = []
 				# Tokenize query to compare with tags (no synonyms/hardcoded keywords)
 				query_tokens = self._normalize_query_tokens(query)
+				logger.debug(f"query_tokens={query_tokens}")
 
 				for res in search_results:
 					payload = res.payload or {}
+					logger.debug(f"Processing result: id={res.id}, score={res.score}, payload_keys={list(payload.keys())}")
 					loc = payload.get('location') or {}
 					if not isinstance(loc, dict) or 'lat' not in loc or 'lon' not in loc:
 						logger.debug("skip: missing_location id=%s", payload.get('business_id') or payload.get('service_id') or payload.get('product_id'))
@@ -384,9 +395,14 @@ class QdrantManager:
 					tags_lower = [str(t).strip().lower() for t in (cleaned_payload.get('tags') or [])]
 					matches_tag = any(t in query_tokens for t in tags_lower)
 					min_pass_score = max(0.2, SEMANTIC_SCORE_THRESHOLD * 0.6)
+					
+					logger.debug(f"entity: {cleaned_payload.get('business_name') or cleaned_payload.get('service_name') or cleaned_payload.get('product_name')}, score={semantic_norm:.3f}, threshold={SEMANTIC_SCORE_THRESHOLD}, matches_tag={matches_tag}, tags={tags_lower}")
+					
 					if not matches_tag and semantic_norm < SEMANTIC_SCORE_THRESHOLD:
+						logger.debug(f"Filtered out due to semantic score {semantic_norm:.3f} < {SEMANTIC_SCORE_THRESHOLD}")
 						continue
 					if matches_tag and semantic_norm < min_pass_score:
+						logger.debug(f"Filtered out due to semantic score {semantic_norm:.3f} < {min_pass_score:.3f} (with tag match)")
 						continue
 
 					interim.append({
@@ -394,7 +410,7 @@ class QdrantManager:
 						'raw_score': semantic_norm,
 						'distance_km': round(distance_km, 6),
 						'payload': cleaned_payload,
-					'has_keyword_overlap': matches_tag
+						'has_keyword_overlap': matches_tag
 					})
 
 				if not interim:
@@ -410,7 +426,11 @@ class QdrantManager:
 					combined_score = SEMANTIC_WEIGHT * semantic_norm + GEO_WEIGHT * distance_score
 					# Gate out items that still look weak semantically even after blending
 					if semantic_norm < SEMANTIC_SCORE_THRESHOLD:
+						logger.debug(f"Skipping due to final semantic threshold check: {semantic_norm:.3f} < {SEMANTIC_SCORE_THRESHOLD}")
 						continue
+					
+					logger.debug(f"entity_type={entity_type}, payload_keys={list(payload.keys())}")
+					
 					if entity_type == 'business':
 						domain_id = payload.get('business_id')
 					elif entity_type == 'service':
@@ -418,9 +438,11 @@ class QdrantManager:
 					elif entity_type == 'product':
 						domain_id = payload.get('product_id')
 					else:
+						logger.warning(f"Unknown entity_type={entity_type}, payload={payload}")
 						domain_id = None
 
 					if not domain_id:
+						logger.warning(f"No domain_id found for entity_type={entity_type}, payload={payload}")
 						continue
 
 					results_scored.append({
@@ -436,6 +458,26 @@ class QdrantManager:
 					best_results = results_scored
 					used_radius_m = radius_m
 					break
+
+			# If no results found with geo constraint, try without geo to debug
+			if not best_results:
+				logger.warning("No results found with geo constraint, trying without geo constraint to debug")
+				try:
+					client_id_str = str(client_id)
+					fallback_filter = Filter(must=[FieldCondition(key='client_id', match=MatchValue(value=client_id_str))])
+					fallback_results = self.client.search(
+						collection_name=self.collection_name,
+						query_vector=query_vector,
+						limit=50,
+						query_filter=fallback_filter
+					)
+					logger.info(f"Fallback search (no geo) found {len(fallback_results) if fallback_results else 0} results for client_id={client_id_str}")
+					if fallback_results:
+						for res in fallback_results[:3]:  # Show first 3
+							payload = res.payload or {}
+							logger.info(f"Fallback result: id={res.id}, score={res.score:.3f}, name={payload.get('business_name') or payload.get('service_name') or payload.get('product_name')}, type={payload.get('type')}, client_id={payload.get('client_id')}")
+				except Exception as e:
+					logger.error(f"Error in fallback search: {e}")
 
 			logger.info("geo_search_entities: selected=%s min_km=%.2f max_km=%.2f", len(best_results), min((r.get('distance_km') or 0) for r in best_results) if best_results else 0, max((r.get('distance_km') or 0) for r in best_results) if best_results else 0)
 			return best_results

@@ -5,7 +5,7 @@ load_dotenv()
 
 # Qdrant Configuration
 # Default to hosted instance unless overridden by env
-QDRANT_HOST = os.getenv("QDRANT_HOST", "34.93.228.193")
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "sangmaner_data")
 
@@ -19,7 +19,7 @@ VECTOR_SIZE = 384
 
 # Semantic search/ranking configuration (tunable via env vars)
 # Minimum cosine similarity required to keep a hit (0..1)
-SEMANTIC_SCORE_THRESHOLD = float(os.getenv("SEMANTIC_SCORE_THRESHOLD", "0.45"))
+SEMANTIC_SCORE_THRESHOLD = float(os.getenv("SEMANTIC_SCORE_THRESHOLD", "0.35"))
 
 # Weights for blended scoring when geo context is used
 # Note: When geo is not applicable, only semantic score is used
