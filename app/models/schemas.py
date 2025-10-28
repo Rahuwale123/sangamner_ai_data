@@ -114,10 +114,10 @@ class UpdateResponse(BaseModel):
 	id: str
 #
 class GeoSearchRequest(BaseModel):
-    latitude: float = Field(..., description="User's latitude coordinate")
-    longitude: float = Field(..., description="User's longitude coordinate")
     client_id: str = Field(..., description="Client ID to filter entities")
-    query: str = Field(..., description="Search query text (e.g., 'tea', 'breakfast', 'restaurant')")
+    query: str = Field(..., description="Search query - can be any question about your data")
+    latitude: Optional[float] = Field(None, description="Optional: User's latitude for geo-based entity search")
+    longitude: Optional[float] = Field(None, description="Optional: User's longitude for geo-based entity search")
 
 class ErrorResponse(BaseModel):
 	status: str = "error"

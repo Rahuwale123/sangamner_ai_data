@@ -110,7 +110,7 @@ class QdrantManager:
 		
 		return " ".join([str(p) for p in text_parts if p])
 
-	def _chunk_text_by_words(self, text: str, chunk_size_words: int = 354, overlap_words: int = 20) -> List[str]:
+	def _chunk_text_by_words(self, text: str, chunk_size_words: int = 200, overlap_words: int = 50) -> List[str]:
 		words = [w for w in (text or "").split() if w]
 		if not words:
 			return []
@@ -128,22 +128,82 @@ class QdrantManager:
 				start = 0
 		return chunks
 
-	def ingest_pdf(self, client_id: Union[str, int], file_bytes: bytes, filename: str, chunk_size_words: int = 354) -> int:
-		"""Ingest a PDF: extract text, chunk, embed, and upsert into TALUKA collection.
+	def ingest_document(self, client_id: Union[str, int], file_bytes: bytes, filename: str, chunk_size_words: int = 200) -> int:
+		"""Ingest a document (PDF/TXT/DOC): extract text, chunk, embed, and upsert into TALUKA collection.
 		Returns the number of chunks indexed.
 		"""
 		try:
-			from PyPDF2 import PdfReader
+			# Ensure collection exists
+			self._ensure_collection_exists_by_name(TALUKA_COLLECTION_NAME)
+
+			# Extract text based on file type
+			full_text = ""
+			file_ext = filename.lower().split('.')[-1]
+			
+			if file_ext == 'pdf':
+				full_text = self._extract_text_from_pdf(file_bytes)
+			elif file_ext == 'txt':
+				full_text = self._extract_text_from_txt(file_bytes)
+			elif file_ext in ['doc', 'docx']:
+				full_text = self._extract_text_from_doc(file_bytes, file_ext)
+			elif file_ext == 'csv':
+				full_text = self._extract_text_from_csv(file_bytes)
+			else:
+				raise ValueError(f"Unsupported file type: {file_ext}. Supported types: PDF, TXT, DOC, DOCX, CSV")
+
+			if not full_text or not full_text.strip():
+				logger.warning(f"No text extracted from {filename}")
+				return 0
+
+			# Chunk
+			chunks = self._chunk_text_by_words(full_text, chunk_size_words=chunk_size_words)
+			if not chunks:
+				return 0
+
+			# Prepare and upsert
+			points: List[PointStruct] = []
+			client_id_str = str(client_id)
+			for idx, chunk in enumerate(chunks):
+				try:
+					vector = self._generate_embedding(chunk)
+				except Exception as e:
+					logger.warning(f"Embedding failed for chunk {idx}: {e}")
+					continue
+				payload: Dict[str, Any] = {
+					"type": "document_chunk",
+					"client_id": client_id_str,
+					"filename": filename,
+					"page_chunks": len(chunks),
+					"chunk_index": idx,
+					"text": chunk,
+				}
+				point = PointStruct(
+					id=self._string_to_uuid(f"{client_id_str}:{filename}:{idx}"),
+					vector=vector,
+					payload=payload
+				)
+				points.append(point)
+
+			if not points:
+				return 0
+
+			self.client.upsert(
+				collection_name=TALUKA_COLLECTION_NAME,
+				points=points
+			)
+			logger.info(f"Ingested {len(points)} chunks from {filename} into {TALUKA_COLLECTION_NAME} for client_id={client_id_str}")
+			return len(points)
+			
 		except Exception as e:
-			logger.error(f"PyPDF2 not installed: {e}")
+			logger.error(f"Error ingesting document {filename}: {e}")
 			raise
 
-		# Ensure collection exists
-		self._ensure_collection_exists_by_name(TALUKA_COLLECTION_NAME)
-
-		# Read PDF text
+	def _extract_text_from_pdf(self, file_bytes: bytes) -> str:
+		"""Extract text from PDF file."""
 		try:
+			from PyPDF2 import PdfReader
 			import io
+			
 			reader = PdfReader(io.BytesIO(file_bytes))
 			pages_text: List[str] = []
 			for page in reader.pages:
@@ -151,49 +211,164 @@ class QdrantManager:
 					pages_text.append(page.extract_text() or "")
 				except Exception:
 					pages_text.append("")
-			full_text = "\n".join(pages_text)
+			return "\n".join(pages_text)
 		except Exception as e:
-			logger.error(f"Failed to read PDF: {e}")
+			logger.error(f"Failed to extract text from PDF: {e}")
 			raise
 
-		# Chunk
-		chunks = self._chunk_text_by_words(full_text, chunk_size_words=chunk_size_words)
-		if not chunks:
-			return 0
-
-		# Prepare and upsert
-		points: List[PointStruct] = []
-		client_id_str = str(client_id)
-		for idx, chunk in enumerate(chunks):
+	def _extract_text_from_txt(self, file_bytes: bytes) -> str:
+		"""Extract text from TXT file."""
+		try:
+			# Try UTF-8 first, fall back to other encodings
 			try:
-				vector = self._generate_embedding(chunk)
-			except Exception as e:
-				logger.warning(f"Embedding failed for chunk {idx}: {e}")
-				continue
-			payload: Dict[str, Any] = {
-				"type": "pdf_chunk",
-				"client_id": client_id_str,
-				"filename": filename,
-				"page_chunks": len(chunks),
-				"chunk_index": idx,
-				"text": chunk,
-			}
-			point = PointStruct(
-				id=self._string_to_uuid(f"{client_id_str}:{filename}:{idx}"),
-				vector=vector,
-				payload=payload
+				return file_bytes.decode('utf-8')
+			except UnicodeDecodeError:
+				try:
+					return file_bytes.decode('latin-1')
+				except UnicodeDecodeError:
+					return file_bytes.decode('cp1252')
+		except Exception as e:
+			logger.error(f"Failed to extract text from TXT: {e}")
+			raise
+
+	def _extract_text_from_doc(self, file_bytes: bytes, file_ext: str) -> str:
+		"""Extract text from DOC/DOCX file."""
+		try:
+			import io
+			
+			if file_ext == 'docx':
+				try:
+					from docx import Document
+					doc = Document(io.BytesIO(file_bytes))
+					text_parts = []
+					for paragraph in doc.paragraphs:
+						if paragraph.text.strip():
+							text_parts.append(paragraph.text)
+					return "\n".join(text_parts)
+				except ImportError:
+					logger.error("python-docx not installed. Install with: pip install python-docx")
+					raise
+			else:  # .doc file
+				try:
+					import textract
+					return textract.process(io.BytesIO(file_bytes)).decode('utf-8')
+				except ImportError:
+					logger.error("textract not installed. Install with: pip install textract")
+					raise
+		except Exception as e:
+			logger.error(f"Failed to extract text from {file_ext.upper()}: {e}")
+			raise
+
+	def _extract_text_from_csv(self, file_bytes: bytes) -> str:
+		"""Extract text from CSV file."""
+		try:
+			import csv
+			import io
+			
+			# Try to decode with different encodings
+			try:
+				text_data = file_bytes.decode('utf-8')
+			except UnicodeDecodeError:
+				try:
+					text_data = file_bytes.decode('latin-1')
+				except UnicodeDecodeError:
+					text_data = file_bytes.decode('cp1252')
+			
+			# Parse CSV
+			csv_reader = csv.reader(io.StringIO(text_data))
+			rows = list(csv_reader)
+			
+			if not rows:
+				return ""
+			
+			# Convert CSV to readable text format
+			text_parts = []
+			headers = rows[0] if rows else []
+			
+			# Add headers
+			if headers:
+				text_parts.append("Headers: " + ", ".join(headers))
+				text_parts.append("")
+			
+			# Add rows in readable format
+			for idx, row in enumerate(rows[1:], 1):
+				if not any(cell.strip() for cell in row):  # Skip empty rows
+					continue
+				
+				row_text = f"Row {idx}: "
+				for header, value in zip(headers, row):
+					if value.strip():
+						row_text += f"{header}={value}, "
+				text_parts.append(row_text.rstrip(", "))
+			
+			return "\n".join(text_parts)
+			
+		except Exception as e:
+			logger.error(f"Failed to extract text from CSV: {e}")
+			raise
+
+	# Keep old method name for backward compatibility
+	def ingest_pdf(self, client_id: Union[str, int], file_bytes: bytes, filename: str, chunk_size_words: int = 200) -> int:
+		"""Legacy method - redirects to ingest_document."""
+		return self.ingest_document(client_id, file_bytes, filename, chunk_size_words)
+
+	def search_pdf_documents(self, client_id: Union[str, int], query: str, limit: int = 10) -> List[Dict[str, Any]]:
+		"""Search PDF documents for a given client_id and query.
+		Returns ranked results with text snippets.
+		"""
+		try:
+			# Ensure collection exists
+			self._ensure_collection_exists_by_name(TALUKA_COLLECTION_NAME)
+			
+			# Generate query embedding
+			query_vector = self._generate_embedding(query)
+			
+			# Build filter for client_id
+			client_id_str = str(client_id)
+			search_filter = Filter(
+				must=[
+					FieldCondition(key='client_id', match=MatchValue(value=client_id_str)),
+					FieldCondition(key='type', match=MatchValue(value='document_chunk'))  # Updated to match new type
+				]
 			)
-			points.append(point)
-
-		if not points:
-			return 0
-
-		self.client.upsert(
-			collection_name=TALUKA_COLLECTION_NAME,
-			points=points
-		)
-		logger.info(f"Ingested {len(points)} chunks into {TALUKA_COLLECTION_NAME} for client_id={client_id_str}")
-		return len(points)
+			
+			# Search - fetch more to ensure we get top results
+			results = self.client.search(
+				collection_name=TALUKA_COLLECTION_NAME,
+				query_vector=query_vector,
+				limit=limit * 3,  # Overfetch to ensure enough results
+				query_filter=search_filter
+			)
+			
+			if not results:
+				logger.info(f"No PDF documents found for client_id={client_id_str} query={query}")
+				return []
+			
+			# Process results - keep scores for sorting
+			temp_results = []
+			for res in results:
+				payload = res.payload or {}
+				score = float(res.score or 0.0)
+				
+				# Get text and truncate if too long (max 500 chars)
+				full_text = payload.get('text', '')
+				text_snippet = full_text[:500] + '...' if len(full_text) > 500 else full_text
+				
+				temp_results.append({
+					'text': text_snippet.strip(),
+					'_score': score  # Temporary field for sorting
+				})
+			
+			# Sort by score (highest first)
+			temp_results.sort(key=lambda x: -x['_score'])
+			
+			# Remove score field and return only text
+			cleaned_results = [{'text': r['text']} for r in temp_results[:limit]]
+			return cleaned_results
+			
+		except Exception as e:
+			logger.error(f"Error searching PDF documents: {e}")
+			return []
 
 	def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 		"""Calculate distance between two points using Haversine formula"""
