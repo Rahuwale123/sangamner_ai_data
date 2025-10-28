@@ -124,6 +124,12 @@ class ErrorResponse(BaseModel):
 	message: str
 	details: Optional[Dict[str, Any]] = None
 
+class PDFIngestResponse(BaseModel):
+    status: str = "success"
+    client_id: str
+    collection: str
+    chunks_indexed: int
+
 class Business(BaseModel):
 	business_id: str
 	name: str
