@@ -7,8 +7,8 @@ from sentence_transformers import SentenceTransformer
 import json
 
 from app.core.config import (
-	QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION_NAME, EMBEDDING_MODEL, VECTOR_SIZE,
-	SEMANTIC_SCORE_THRESHOLD, SEMANTIC_WEIGHT, GEO_WEIGHT,
+    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION_NAME, EMBEDDING_MODEL, VECTOR_SIZE,
+    SEMANTIC_SCORE_THRESHOLD, SEMANTIC_WEIGHT, GEO_WEIGHT, TALUKA_COLLECTION_NAME,
 )
 from app.models.schemas import BusinessPayload, ServicePayload, ProductPayload, Location
 
@@ -33,6 +33,20 @@ class QdrantManager:
 		self.embedding_model = SentenceTransformer(EMBEDDING_MODEL)
 		self.collection_name = QDRANT_COLLECTION_NAME
 		self._ensure_collection_exists()
+
+	def _ensure_collection_exists_by_name(self, collection_name: str):
+		try:
+			collections = self.client.get_collections()
+			collection_names = [col.name for col in collections.collections]
+			if collection_name not in collection_names:
+				self.client.create_collection(
+					collection_name=collection_name,
+					vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)
+				)
+				logger.info(f"Created collection: {collection_name}")
+		except Exception as e:
+			logger.error(f"Error ensuring collection {collection_name}: {e}")
+			raise
 
 	def _ensure_collection_exists(self):
 		"""Create collection if it doesn't exist"""
@@ -95,6 +109,91 @@ class QdrantManager:
 			text_parts.extend(lower_tags * 3)
 		
 		return " ".join([str(p) for p in text_parts if p])
+
+	def _chunk_text_by_words(self, text: str, chunk_size_words: int = 354, overlap_words: int = 20) -> List[str]:
+		words = [w for w in (text or "").split() if w]
+		if not words:
+			return []
+		chunks: List[str] = []
+		start = 0
+		while start < len(words):
+			end = min(start + chunk_size_words, len(words))
+			chunk = " ".join(words[start:end])
+			if chunk.strip():
+				chunks.append(chunk)
+			if end == len(words):
+				break
+			start = end - overlap_words
+			if start < 0:
+				start = 0
+		return chunks
+
+	def ingest_pdf(self, client_id: Union[str, int], file_bytes: bytes, filename: str, chunk_size_words: int = 354) -> int:
+		"""Ingest a PDF: extract text, chunk, embed, and upsert into TALUKA collection.
+		Returns the number of chunks indexed.
+		"""
+		try:
+			from PyPDF2 import PdfReader
+		except Exception as e:
+			logger.error(f"PyPDF2 not installed: {e}")
+			raise
+
+		# Ensure collection exists
+		self._ensure_collection_exists_by_name(TALUKA_COLLECTION_NAME)
+
+		# Read PDF text
+		try:
+			import io
+			reader = PdfReader(io.BytesIO(file_bytes))
+			pages_text: List[str] = []
+			for page in reader.pages:
+				try:
+					pages_text.append(page.extract_text() or "")
+				except Exception:
+					pages_text.append("")
+			full_text = "\n".join(pages_text)
+		except Exception as e:
+			logger.error(f"Failed to read PDF: {e}")
+			raise
+
+		# Chunk
+		chunks = self._chunk_text_by_words(full_text, chunk_size_words=chunk_size_words)
+		if not chunks:
+			return 0
+
+		# Prepare and upsert
+		points: List[PointStruct] = []
+		client_id_str = str(client_id)
+		for idx, chunk in enumerate(chunks):
+			try:
+				vector = self._generate_embedding(chunk)
+			except Exception as e:
+				logger.warning(f"Embedding failed for chunk {idx}: {e}")
+				continue
+			payload: Dict[str, Any] = {
+				"type": "pdf_chunk",
+				"client_id": client_id_str,
+				"filename": filename,
+				"page_chunks": len(chunks),
+				"chunk_index": idx,
+				"text": chunk,
+			}
+			point = PointStruct(
+				id=self._string_to_uuid(f"{client_id_str}:{filename}:{idx}"),
+				vector=vector,
+				payload=payload
+			)
+			points.append(point)
+
+		if not points:
+			return 0
+
+		self.client.upsert(
+			collection_name=TALUKA_COLLECTION_NAME,
+			points=points
+		)
+		logger.info(f"Ingested {len(points)} chunks into {TALUKA_COLLECTION_NAME} for client_id={client_id_str}")
+		return len(points)
 
 	def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 		"""Calculate distance between two points using Haversine formula"""

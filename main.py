@@ -1,5 +1,5 @@
 import logging
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Union, Optional
 import uvicorn
@@ -44,17 +44,23 @@ async def root():
 async def health_check():
 	"""Detailed health check"""
 	try:
-		# Test Qdrant connection
-		collections = api_handler.qdrant_manager.client.get_collections()
-		collection_info = api_handler.qdrant_manager.client.get_collection(api_handler.qdrant_manager.collection_name)
-		
+		# Test Qdrant connection using safe calls (avoid strict model parsing)
+		client = api_handler.qdrant_manager.client
+		collections = client.get_collections()
+		collection_name = api_handler.qdrant_manager.collection_name
+		points_count = None
+		try:
+			count_resp = client.count(collection_name=collection_name, exact=True)
+			# Some client versions return object with "count" attribute, fallback to dict
+			points_count = getattr(count_resp, "count", None) or (count_resp.get("count") if isinstance(count_resp, dict) else None)
+		except Exception:
+			points_count = None
+
 		return {
 			"status": "healthy",
 			"qdrant_connection": "ok",
-			"collection_name": api_handler.qdrant_manager.collection_name,
-			"points_count": collection_info.points_count,
-			"vector_size": collection_info.config.params.vectors.size,
-			"distance": collection_info.config.params.vectors.distance,
+			"collection_name": collection_name,
+			"points_count": points_count,
 			"message": "All systems operational"
 		}
 	except Exception as e:
@@ -188,6 +194,23 @@ async def search_nearby_services(geo_request: GeoSearchRequest):
 	Returns mixed entities with fields: entity_type, entity_id, score, payload (entire stored object).
 	"""
 	return await api_handler.geo_search_services(geo_request)
+
+
+@app.post("/data/ingest/pdf")
+async def ingest_pdf_endpoint(
+	client_id: str = Form(...),
+	file: UploadFile = File(...)
+):
+	"""Upload a PDF and ingest it into the taluka collection for the given client_id.
+
+	Form-data fields:
+	- client_id: string
+	- file: PDF file
+	"""
+	if not file.filename.lower().endswith(".pdf"):
+		raise HTTPException(status_code=400, detail="Only PDF files are supported")
+	content = await file.read()
+	return await api_handler.ingest_pdf(client_id=client_id, file_bytes=content, filename=file.filename)
 
 
 @app.exception_handler(HTTPException)

@@ -7,6 +7,7 @@ from app.models.schemas import (
 	BusinessPayload, ServicePayload, ProductPayload, EntityType,
 	GeoSearchRequest, Business, Service, Product, Location
 )
+from app.models.schemas import PDFIngestResponse
 from app.services.qdrant_manager import QdrantManager
  
 
@@ -17,6 +18,15 @@ class DataAPIHandler:
 	def __init__(self):
 		self.qdrant_manager = QdrantManager()
 		
+
+	async def ingest_pdf(self, client_id: str, file_bytes: bytes, filename: str) -> PDFIngestResponse:
+		"""Ingest a PDF file into the taluka collection for a client."""
+		try:
+			count = self.qdrant_manager.ingest_pdf(client_id=client_id, file_bytes=file_bytes, filename=filename, chunk_size_words=354)
+			return PDFIngestResponse(status="success", client_id=str(client_id), collection="sangamner_taluka", chunks_indexed=count)
+		except Exception as e:
+			logger.error(f"Error ingesting PDF: {e}")
+			raise HTTPException(status_code=500, detail=f"Failed to ingest PDF: {str(e)}")
 
 	async def save_data(self, request: Union[Business, Service, Product]) -> SaveResponse:
 		"""Handle save data API request"""
