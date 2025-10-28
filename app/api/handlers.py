@@ -22,7 +22,7 @@ class DataAPIHandler:
 	async def ingest_pdf(self, client_id: str, file_bytes: bytes, filename: str) -> PDFIngestResponse:
 		"""Ingest a PDF file into the taluka collection for a client."""
 		try:
-			count = self.qdrant_manager.ingest_pdf(client_id=client_id, file_bytes=file_bytes, filename=filename, chunk_size_words=354)
+			count = self.qdrant_manager.ingest_pdf(client_id=client_id, file_bytes=file_bytes, filename=filename, chunk_size_words=200)
 			return PDFIngestResponse(status="success", client_id=str(client_id), collection="sangamner_taluka", chunks_indexed=count)
 		except Exception as e:
 			logger.error(f"Error ingesting PDF: {e}")
@@ -222,37 +222,62 @@ class DataAPIHandler:
 			raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 	async def geo_search_services(self, geo_request: GeoSearchRequest) -> Dict[str, Any]:
-		"""Search across client using semantic + distance sort (iterative geo radius, hidden from client)."""
+		"""Unified search - PDFs when no geo, entities when geo provided."""
 		try:
-			logger.info("geo_search_services: lat=%s lon=%s client_id=%s query=%r", geo_request.latitude, geo_request.longitude, geo_request.client_id, geo_request.query)
-			results = self.qdrant_manager.geo_search_entities(
-				latitude=geo_request.latitude,
-				longitude=geo_request.longitude,
-				client_id=geo_request.client_id,
-				query=geo_request.query
-			)
-			logger.info("geo_search_services: total=%s example_ids=%s", len(results), [r.get("entity_id") for r in results[:3]])
+			logger.info("Search request: client_id=%s query=%r lat=%s lon=%s", 
+					   geo_request.client_id, geo_request.query, geo_request.latitude, geo_request.longitude)
+			
+			# Check if geo coordinates are provided
+			if geo_request.latitude is not None and geo_request.longitude is not None:
+				# Geo search - search ONLY sangmner_data collection (entities)
+				logger.info("Geo coordinates provided - searching entities only")
+				try:
+					entity_results = self.qdrant_manager.geo_search_entities(
+						latitude=geo_request.latitude,
+						longitude=geo_request.longitude,
+						client_id=geo_request.client_id,
+						query=geo_request.query
+					)
+					# Take top 3 results
+					all_results = entity_results[:3]
+					logger.info(f"Found {len(all_results)} entity results")
+				except Exception as e:
+					logger.error(f"Entity search failed: {e}")
+					all_results = []
+			else:
+				# No geo - search ONLY PDF documents
+				logger.info("No geo coordinates - searching PDFs only")
+				try:
+					pdf_results = self.qdrant_manager.search_pdf_documents(
+						client_id=geo_request.client_id,
+						query=geo_request.query,
+						limit=3
+					)
+					all_results = pdf_results
+					logger.info(f"Found {len(all_results)} PDF results")
+				except Exception as e:
+					logger.error(f"PDF search failed: {e}")
+					all_results = []
+			
+			logger.info("Search complete: total=%s", len(all_results))
 			
 			response_data = {
 				"status": "success",
-				"search_params": {
-					"latitude": geo_request.latitude,
-					"longitude": geo_request.longitude,
-					"client_id": geo_request.client_id,
-					"query": geo_request.query
-				},
-				"results": results,
-				"total": len(results)
+				"results": all_results,
+				"total": len(all_results)
 			}
 			
 			# Add helpful message when no results found
-			if not results:
-				response_data["message"] = "No businesses, services, or products found matching your query. Try adjusting your search terms or expanding your search area."
+			if not all_results:
+				if geo_request.latitude is not None and geo_request.longitude is not None:
+					response_data["message"] = "No businesses/services found nearby. Try adjusting your search area."
+				else:
+					response_data["message"] = "No PDF results found. Please upload documents first."
 			
 			return response_data
 			
 		except Exception as e:
-			logger.error(f"Error in geo search: {e}")
+			logger.error(f"Error in search: {e}")
 			raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 	async def search_entities(self, query: str, limit: int = 10, entity_type: str = None, group_id: int = None) -> Dict[str, Any]:

@@ -175,23 +175,77 @@ async def delete_entity(entity_id: str):
 @app.post("/data/search/nearby")
 async def search_nearby_services(geo_request: GeoSearchRequest):
 	"""
-	Search for nearby entities (businesses, services, products) for a client using semantic + distance sort.
+	Flexible search API with automatic collection selection:
+	- **Without lat/lon**: Searches PDF documents (sangamner_taluka collection)
+	- **With lat/lon**: Searches entities only (sangmner_data collection - businesses/services/products)
 	
-	The server applies an increasing geo radius internally (2km → 5km → 10km → 20km → ...)
-	until matches are found, then returns results with the full stored payload for each entity.
+	**Required Fields:**
+	- `client_id`: Your client identifier
+	- `query`: Your question or search query
 	
-	**Request Body:**
+	**Optional Fields:**
+	- `latitude`: Include to search businesses/services/products by location
+	- `longitude`: Include to search businesses/services/products by location
+	
+	---
+	
+	**Use Case 1: PDF Search (No Geo)**
 	```json
 	{
-		"latitude": 19.123,
-		"longitude": 73.456,
 		"client_id": "client-1",
-		"query": "tea breakfast"
+		"query": "What is the population?"
+	}
+	```
+	Searches: `sangamner_taluka` collection (PDF documents)
+	
+	---
+	
+	**Use Case 2: Geo-Based Entity Search**
+	```json
+	{
+		"client_id": "client-1",
+		"query": "tea shops",
+		"latitude": 19.123,
+		"longitude": 73.456
+	}
+	```
+	Searches: `sangmner_data` collection (businesses/services/products)
+	
+	---
+	
+	**Response (PDF Search):**
+	```json
+	{
+		"status": "success",
+		"results": [
+			{
+				"filename": "document.pdf",
+				"chunk_index": 5,
+				"text": "The population is...",
+				"score": 0.85,
+				"type": "pdf_document"
+			}
+		],
+		"total": 3
 	}
 	```
 	
-	**Response:**
-	Returns mixed entities with fields: entity_type, entity_id, score, payload (entire stored object).
+	**Response (Geo Search):**
+	```json
+	{
+		"status": "success",
+		"results": [
+			{
+				"entity_id": "biz-123",
+				"entity_type": "business",
+				"score": 0.85,
+				"distance_km": 0.5,
+				"payload": {...}
+			}
+		],
+		"total": 3
+	}
+	```
 	"""
 	return await api_handler.geo_search_services(geo_request)
 
@@ -201,14 +255,31 @@ async def ingest_pdf_endpoint(
 	client_id: str = Form(...),
 	file: UploadFile = File(...)
 ):
-	"""Upload a PDF and ingest it into the taluka collection for the given client_id.
+	"""Upload a document (PDF/TXT/DOC/DOCX/CSV) and ingest it into the taluka collection.
 
 	Form-data fields:
 	- client_id: string
-	- file: PDF file
+	- file: Document file (PDF, TXT, DOC, DOCX, or CSV)
+	
+	Supported file types:
+	- PDF (.pdf)
+	- Text (.txt)
+	- Word Document (.doc, .docx)
+	- CSV (.csv)
 	"""
-	if not file.filename.lower().endswith(".pdf"):
-		raise HTTPException(status_code=400, detail="Only PDF files are supported")
+	if not file.filename:
+		raise HTTPException(status_code=400, detail="File name is required")
+	
+	# Check file extension
+	file_ext = file.filename.lower().split('.')[-1]
+	allowed_extensions = ['pdf', 'txt', 'doc', 'docx', 'csv']
+	
+	if file_ext not in allowed_extensions:
+		raise HTTPException(
+			status_code=400, 
+			detail=f"Unsupported file type: .{file_ext}. Supported types: PDF, TXT, DOC, DOCX, CSV"
+		)
+	
 	content = await file.read()
 	return await api_handler.ingest_pdf(client_id=client_id, file_bytes=content, filename=file.filename)
 
