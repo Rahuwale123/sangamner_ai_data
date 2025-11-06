@@ -71,6 +71,7 @@ class DataAPIHandler:
 				country=request.country,
 				email=request.email,
 				website=request.website,
+				logo_url=request.logo_url,
 			)
 			
 			# Save to Qdrant
@@ -104,6 +105,7 @@ class DataAPIHandler:
 				tags=request.tags or [],
 				client_id=request.client_id,
 				user_id=request.user_id,
+				logo_url=request.logo_url,
 			)
 			
 			# Save to Qdrant
@@ -141,6 +143,7 @@ class DataAPIHandler:
 				description=request.description,
 				tags=request.tags or [],
 				client_id=request.client_id,
+				logo_url=request.logo_url,
 			)
 			
 			# Save to Qdrant

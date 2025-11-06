@@ -31,6 +31,7 @@ class BusinessPayload(BaseModel):
 	country: Optional[str] = Field(None, description="Country")
 	email: Optional[str] = Field(None, description="Email")
 	website: Optional[str] = Field(None, description="Website")
+	logo_url: Optional[str] = Field(None, description="Logo image URL or base64 string")
 
 class ServicePayload(BaseModel):
 	type: EntityType = EntityType.SERVICE
@@ -44,6 +45,7 @@ class ServicePayload(BaseModel):
 	tags: Optional[List[str]] = Field(default_factory=list, description="Service tags")
 	client_id: Optional[str] = Field(None, description="Client identifier")
 	user_id: Optional[str] = Field(None, description="User identifier")
+	logo_url: Optional[str] = Field(None, description="Logo image URL or base64 string")
 
 class ProductPayload(BaseModel):
 	type: EntityType = EntityType.PRODUCT
@@ -57,6 +59,7 @@ class ProductPayload(BaseModel):
 	description: Optional[str] = Field(None, description="Product description")
 	tags: Optional[List[str]] = Field(default_factory=list, description="Product tags")
 	client_id: Optional[str] = Field(None, description="Client identifier")
+	logo_url: Optional[str] = Field(None, description="Logo image URL or base64 string")
 
 class SaveBusinessRequest(BaseModel):
 	type: EntityType = EntityType.BUSINESS
@@ -104,6 +107,7 @@ class UpdateRequest(BaseModel):
 	price: Optional[str] = None
 	description: Optional[str] = None
 	tags: Optional[List[str]] = None
+	logo_url: Optional[str] = None
 
 class SaveResponse(BaseModel):
 	status: str = "success"
@@ -148,6 +152,7 @@ class Business(BaseModel):
 	lat: float
 	long: float
 	tags: List[str] = []
+	logo_url: Optional[str] = None
 
 class Service(BaseModel):
 	service_id: str
@@ -159,6 +164,7 @@ class Service(BaseModel):
 	lat: float
 	long: float
 	tags: List[str] = []
+	logo_url: Optional[str] = None
 
 class Product(BaseModel):
 	product_id: str
@@ -169,3 +175,4 @@ class Product(BaseModel):
 	lat: float
 	long: float
 	tags: List[str] = []
+	logo_url: Optional[str] = None
